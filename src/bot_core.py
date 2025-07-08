@@ -20,8 +20,7 @@ from telegram.ext import (
 )
 import main
 import config
-import mysql.connector
-from mysql.connector import Error
+import sqlite3
 
 
 # ساخت پوشه logs اگر وجود نداشته باشه
@@ -44,125 +43,114 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-def get_db_connection():
-    try:
-        conn = mysql.connector.connect(**config.MYSQL_CONFIG)
-        return conn
-    except Error as e:
-        print(f"خطا در اتصال به MySQL: {e}")
-        return None
+DB_PATH = Path("logs") / "base_bot.db"
+
+def init_sqlite_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # ایجاد جداول
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS allowed_users (
+            user_id INTEGER PRIMARY KEY
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS all_users (
+            user_id INTEGER PRIMARY KEY
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS message_counts (
+            user_id INTEGER PRIMARY KEY,
+            count INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_sqlite_db()  # اولین بار دیتابیس رو می‌سازه
 
 allowed_users = []
 temp_admins = {}  # user_id: last_active_timestamp
 
 
 def save_message_counts(counts):
-    conn = get_db_connection()
-    if not conn:
-        return
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     try:
-        cursor = conn.cursor()
         for user_id, count in counts.items():
             cursor.execute("""
-                INSERT INTO message_counts (user_id, count)
-                VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE count = %s
-            """, (user_id, count, count))
+                INSERT OR REPLACE INTO message_counts (user_id, count)
+                VALUES (?, ?)
+            """, (user_id, count))
         conn.commit()
-    except Error as e:
+    except Exception as e:
         print(f"خطا در ذخیره شمارش پیام‌ها: {e}")
     finally:
-        if conn.is_connected():
-            cursor.close()
-            conn.close()
+        conn.close()
 
 user_message_counts = {}
 
 def load_message_counts():
-    conn = get_db_connection()
-    if not conn:
-        return {}
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     try:
-        cursor = conn.cursor()
         cursor.execute("SELECT user_id, count FROM message_counts")
         return {str(row[0]): row[1] for row in cursor.fetchall()}
-    except Error as e:
+    except Exception as e:
         print(f"خطا در بارگذاری شمارش پیام‌ها: {e}")
         return {}
     finally:
-        if conn.is_connected():
-            cursor.close()
-            conn.close()
+        conn.close()
 user_message_counts = load_message_counts()
 
 def save_allowed_users(user_list):
-    conn = get_db_connection()
-    if not conn:
-        return
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     try:
-        cursor = conn.cursor()
-        # حذف همه کاربران قبلی
         cursor.execute("DELETE FROM allowed_users")
-        # اضافه کردن کاربران جدید
         for user_id in user_list:
-            cursor.execute("INSERT IGNORE INTO allowed_users (user_id) VALUES (%s)", (user_id,))
+            cursor.execute("INSERT OR IGNORE INTO allowed_users (user_id) VALUES (?)", (user_id,))
         conn.commit()
-    except Error as e:
+    except Exception as e:
         print(f"خطا در ذخیره کاربران مجاز: {e}")
     finally:
-        if conn.is_connected():
-            cursor.close()
-            conn.close()
+        conn.close()
 
 
 def load_allowed_users():
-    conn = get_db_connection()
-    if not conn:
-        print("اتصال به MySQL برقرار نشد. ادمین اصلی به صورت پیش‌فرض اضافه شد.")
-        return [config.ADMIN_USER_ID]
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     try:
-        cursor = conn.cursor()
         cursor.execute("SELECT user_id FROM allowed_users")
         users = [row[0] for row in cursor.fetchall()]
         if config.ADMIN_USER_ID not in users:
             users.append(config.ADMIN_USER_ID)
             save_allowed_users(users)
         return users
-    except Error as e:
+    except Exception as e:
         print(f"خطا در بارگذاری کاربران مجاز: {e}")
         return [config.ADMIN_USER_ID]
     finally:
-        if conn.is_connected():
-            cursor.close()
-            conn.close()
+        conn.close()
 
 
 def check_all_users(user_id):
-    conn = get_db_connection()
-    if not conn:
-        return False
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     try:
-        cursor = conn.cursor()
-
-        # بررسی اینکه آیا کاربر وجود داره
-        cursor.execute("SELECT user_id FROM all_users WHERE user_id = %s", (user_id,))
+        cursor.execute("SELECT user_id FROM all_users WHERE user_id=?", (user_id,))
         result = cursor.fetchone()
-
         is_new = result is None
-
         if is_new:
-            # اگر کاربر جدید باشه، اضافه کن
-            cursor.execute("INSERT IGNORE INTO all_users (user_id) VALUES (%s)", (user_id,))
+            cursor.execute("INSERT OR IGNORE INTO all_users (user_id) VALUES (?)", (user_id,))
             conn.commit()
-
         return is_new
-    except Error as e:
+    except Exception as e:
         print(f"خطا در ثبت کاربر: {e}")
         return False
     finally:
-        if conn.is_connected():
-            cursor.close()
-            conn.close()
+        conn.close()
 
 
 def is_admin(user_id):
