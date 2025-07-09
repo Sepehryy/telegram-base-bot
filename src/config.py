@@ -19,7 +19,7 @@ LOG_CHAT_ID = -1002657940872             # آیدی کانال یا گروهی �
 # تنظیمات MySQL
 MYSQL_CONFIG = {
     "host": "localhost",
-    "user": os.getenv("DB_USER", "base_bot_user"),
-    "password": os.getenv("DB_PASSWORD", "sepehrleo"),
+    "user": "base_bot_user",
+    "password": "sepehrleo",
     "database": "base_bot"
 }
